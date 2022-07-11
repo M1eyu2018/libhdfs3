@@ -40,7 +40,7 @@ ADD_EXECUTABLE(secure EXCLUDE_FROM_ALL
     ${secure_SOURCES}
 )
 
-TARGET_LINK_LIBRARIES(secure pthread)
+TARGET_LINK_LIBRARIES(secure gtest gmock pthread)
 
 IF(NEED_BOOST)
     INCLUDE_DIRECTORIES(${Boost_INCLUDE_DIR})

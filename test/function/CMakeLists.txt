@@ -40,7 +40,7 @@ ADD_EXECUTABLE(function EXCLUDE_FROM_ALL
     ${function_SOURCES}
 )
 
-TARGET_LINK_LIBRARIES(function pthread)
+TARGET_LINK_LIBRARIES(function gtest gmock pthread)
 
 IF(NEED_BOOST)
     INCLUDE_DIRECTORIES(${Boost_INCLUDE_DIR})
