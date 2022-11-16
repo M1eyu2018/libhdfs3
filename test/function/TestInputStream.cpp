@@ -494,3 +494,64 @@ TEST(TestThroughput, TestSeekAhead) {
         elapsed, CalculateThroughput(elapsed, fileLength));
     fs.deletePath(filename, true);
 }
+
+TEST(TestThroughput, TestSeek) {
+    Config conf("function-test.xml");
+    conf.set("dfs.client.read.shortcircuit", false);
+    FileSystem fs(conf);
+    fs.connect();
+    SetupTestEnv(fs, conf);
+
+    const char * filename = BASE_DIR"TestThroughput_TestSeek";
+    OutputStream ous;
+    EXPECT_NO_THROW(
+        DebugException(ous.open(fs, filename, Create | Overwrite /*| SyncBlock*/)));
+
+    int64_t fileLength = 256 * 1024 * 1024ll;
+    int64_t todo = fileLength, batch;
+    int32_t mod = 31;
+    std::vector<char> writeBuffer(1024 * 1024);
+
+    while (todo > 0) {
+        int64_t val = (fileLength - todo) % mod;
+        for (int32_t i = 0; i < static_cast<int>(writeBuffer.size()); ++i) {
+            writeBuffer[i] = val % mod;
+            val = (val + 1) % mod;
+        }
+        batch = todo < static_cast<int>(writeBuffer.size()) ? todo : writeBuffer.size();
+        ASSERT_NO_THROW(DebugException(ous.append(&writeBuffer[0], batch)));
+        todo -= batch;
+    }
+    ASSERT_NO_THROW(DebugException(ous.close()));
+
+    srand((int)time(0));
+    steady_clock::time_point start, stop;
+    InputStream in;
+    int32_t times = 100;
+    int64_t blockSize = 64 * 1024 * 1024;
+    int64_t totalElapsed = 0;
+
+    for(int32_t i = 0; i < times; ++i) {
+        int64_t pos = rand() % blockSize;
+        int64_t readSize = rand() % (blockSize - pos) + 1;
+        std::vector<char> readBuffer(readSize);
+
+        EXPECT_NO_THROW(in.open(fs, filename, true));
+        int32_t read = in.read(&readBuffer[0], 1);
+        ASSERT_TRUE(read == 1);
+
+        start = steady_clock::now();
+        in.seek(pos);
+        in.readFully(&readBuffer[0], readBuffer.size());
+        stop = steady_clock::now();
+        totalElapsed += ToMilliSeconds(start, stop);
+
+        ASSERT_TRUE(readBuffer[0] == pos % mod);
+        ASSERT_TRUE(readBuffer[read - 1] == (pos + read - 1) % mod);
+        EXPECT_NO_THROW(in.close());
+    }
+
+    double avgElapsed = static_cast<double>(totalElapsed) / times;
+    printf("seek and read file time %lf ms\n", avgElapsed);
+   
+}
