@@ -43,6 +43,7 @@
 #include "Unordered.h"
 #include "UserInfo.h"
 #include "XmlConfig.h"
+#include "SlowNodeCache.h"
 
 namespace Hdfs {
 
@@ -492,6 +493,13 @@ public:
      * @return return the peer cache.
      */
     virtual PeerCache& getPeerCache() = 0;
+
+    /**
+     * Get the slow node cache.
+     *
+     * @return return the slow node cache.
+     */
+    virtual SlowNodeCache& getSlowNodeCache() = 0;
 };
 
 }

@@ -35,6 +35,7 @@
 #include "RemoteBlockReader.h"
 #include "server/Datanode.h"
 #include "Thread.h"
+#include "Faultjector.h"
 
 #include <algorithm>
 #include <ifaddrs.h>
@@ -127,7 +128,8 @@ unordered_set<std::string> BuildLocalAddrSet() {
 InputStreamImpl::InputStreamImpl() :
     closed(true), localRead(true), readFromUnderConstructedBlock(false), verify(
         true), maxGetBlockInfoRetry(3), cursor(0), endOfCurBlock(0), lastBlockBeingWrittenLength(
-            0), prefetchSize(0), peerCache(NULL) {
+            0), prefetchSize(0), peerCache(NULL), slowNodeCache(NULL), dfsClientReadWriteMetricEnable(false),
+            dfsClientSlowDatanodeKickoutEnable(false) {
 #ifdef MOCK
     stub = NULL;
 #endif
@@ -319,18 +321,54 @@ void InputStreamImpl::seekToBlock(const LocatedBlock & lb) {
 
 bool InputStreamImpl::choseBestNode() {
     const std::vector<DatanodeInfo> & nodes = curBlock->getLocations();
-
+    if (nodes.empty()) {
+        return false;
+    }
+    int chosenNodeIndex = -1;
+    std::vector<bool> nodesChosenArray(nodes.size());
     for (size_t i = 0; i < nodes.size(); ++i) {
         if (std::binary_search(failedNodes.begin(), failedNodes.end(),
                                nodes[i])) {
             continue;
         }
 
-        curNode = nodes[i];
-        return true;
+        chosenNodeIndex = i;
+        if (dfsClientReadWriteMetricEnable &&
+            dfsClientSlowDatanodeKickoutEnable) {
+            nodesChosenArray[i] = true;
+        } else {
+            break;
+        }
     }
-
-    return false;
+    if (dfsClientReadWriteMetricEnable &&
+        dfsClientSlowDatanodeKickoutEnable) {
+        chosenNodeIndex = -1;
+        // exclude slow nodes
+        double minSlowNodeMetricsValue = -1.0;
+        for (size_t i = 0; i < nodesChosenArray.size(); i++) {
+            // choose the first normal node
+            if (nodesChosenArray[i]) {
+                if (!slowNodeCache->containsKey(nodes[i])) {
+                    chosenNodeIndex = i;
+                    break;
+                } else {
+                    double curSlowNodeMetricsValue = getNodeSlowMetrics(nodes[i])->getAvg();
+                    if (minSlowNodeMetricsValue == -1.0) {
+                        minSlowNodeMetricsValue = curSlowNodeMetricsValue;
+                        chosenNodeIndex = i;
+                    } else if (curSlowNodeMetricsValue < minSlowNodeMetricsValue) {
+                        minSlowNodeMetricsValue = curSlowNodeMetricsValue;
+                        chosenNodeIndex = i;
+                    }
+                }
+            }
+        }
+    }
+    if (chosenNodeIndex < 0) {
+        return false;
+    }
+    curNode = nodes[chosenNodeIndex];
+    return true;
 }
 
 bool InputStreamImpl::isLocalNode() {
@@ -382,9 +420,12 @@ void InputStreamImpl::setupBlockReader(bool temporaryDisableLocalRead) {
                     }
 
                     assert(info->isValid());
+                    steady_clock::time_point startTime = steady_clock::now();
+                    checkSlowNode(curBlock, curNode);
                     blockReader = shared_ptr<BlockReader>(
                         new LocalBlockReader(info, *curBlock, offset, verify,
                                              *conf, localReaderBuffer));
+                    slowNodeMetrics(ToMilliSeconds(startTime, steady_clock::now()), curBlock, curNode);
                 } catch (...) {
                     if (info) {
                         info->setValid(false);
@@ -395,12 +436,20 @@ void InputStreamImpl::setupBlockReader(bool temporaryDisableLocalRead) {
             } else {
                 const char * clientName = filesystem->getClientName();
                 lastReadFromLocal = false;
+                steady_clock::time_point startTime = steady_clock::now();
+                checkSlowNode(curBlock, curNode);
                 blockReader = shared_ptr<BlockReader>(new RemoteBlockReader(
                     *curBlock, curNode, *peerCache, offset, len,
                     curBlock->getToken(), clientName, verify, *conf));
+                slowNodeMetrics(ToMilliSeconds(startTime, steady_clock::now()), curBlock, curNode);
             }
 
             break;
+        } catch (const SlowNodeException & e) {
+            lastException = current_exception();
+            std::string buffer;
+            LOG(WARNING, "%s", GetExceptionDetail(e, buffer));
+            addToSlowNodes(curNode);
         } catch (const HdfsIOException & e) {
             lastException = current_exception();
             std::string buffer;
@@ -454,6 +503,12 @@ void InputStreamImpl::openInternal(shared_ptr<FileSystemInter> fs, const char * 
         localRead = conf->isReadFromLocal();
         maxGetBlockInfoRetry = conf->getMaxGetBlockInfoRetry();
         peerCache = &fs->getPeerCache();
+        dfsClientReadWriteMetricEnable = conf->getDfsClientReadWriteMetricEnable();
+        dfsClientSlowDatanodeKickoutEnable = conf->getDfsClientSlowDatanodeKickoutEnable();
+        if (dfsClientReadWriteMetricEnable) {
+            slowMetricsMap = shared_ptr<SlowMetricsMap>(new SlowMetricsMap());
+        }
+        slowNodeCache = &fs->getSlowNodeCache();
         updateBlockInfos(!lbs);
         closed = false;
     } catch (const HdfsCanceled & e) {
@@ -524,17 +579,27 @@ int32_t InputStreamImpl::readOneBlock(char * buf, int32_t size, bool shouldUpdat
         /*
          * Block reader has been setup, read from block reader.
          */
+        bool needAddToFailedNodes = true;
         try {
             int32_t todo = size;
             todo = todo < endOfCurBlock - cursor ?
                    todo : static_cast<int32_t>(endOfCurBlock - cursor);
             assert(blockReader);
+            steady_clock::time_point startTime = steady_clock::now();
+            checkSlowNode(curBlock, curNode);
+            // test slow node
+            FaultInjector::get().testSlowNodeMetrics(curNode);
             todo = blockReader->read(buf, todo);
+            slowNodeMetrics(ToMilliSeconds(startTime, steady_clock::now()), curBlock, curNode);
             cursor += todo;
             /*
              * Exit the loop and function from here if success.
              */
             return todo;
+        } catch (const SlowNodeException & e) {
+            LOG(WARNING, "%s", GetExceptionDetail(e, buffer));
+            addToSlowNodes(curNode);
+            needAddToFailedNodes = false;
         } catch (const HdfsIOException & e) {
             /*
              * Failed to read from current block reader,
@@ -563,7 +628,7 @@ int32_t InputStreamImpl::readOneBlock(char * buf, int32_t size, bool shouldUpdat
          */
         if (!blockReader || dynamic_cast<LocalBlockReader *>(blockReader.get())) {
             temporaryDisableLocalRead = true;
-        } else {
+        } else if (needAddToFailedNodes) {
             /*
              * Remote block reader failed to read, try another node.
              */
@@ -823,6 +888,83 @@ std::string InputStreamImpl::toString() {
         return std::string("InputStream for path ") + path;
     } else {
         return std::string("InputStream (not opened)");
+    }
+}
+
+void InputStreamImpl::addToSlowNodes(const DatanodeInfo & dnInfo) {
+    slowNodeCache->put(dnInfo);
+}
+
+void InputStreamImpl::checkSlowNode(shared_ptr<LocatedBlock> block, const DatanodeInfo & datanodeInfo) {
+    if (!dfsClientReadWriteMetricEnable ||
+        !dfsClientSlowDatanodeKickoutEnable ||
+        block == NULL) {
+        return;
+    }
+    shared_ptr<SlowMetrics> metrics = getNodeSlowMetrics(datanodeInfo);
+    if (metrics->inSlowState()) {
+        std::string msg = "read block " + block->toStringDetailed() +
+                          " of file " + path + " from datanode " +
+                          datanodeInfo.getXferAddr() + " meet slow metric: " +
+                          std::to_string((long)metrics->getAvg()) + "ms";
+        bool canSwitch = canSwitchToOtherNode(datanodeInfo, block);
+        if (dfsClientSlowDatanodeKickoutEnable && canSwitch) {
+            THROW(SlowNodeException, "%s, switch to other datanode automatically!", msg.c_str());
+        } else {
+            LOG(WARNING, "%s, but no other datanode can be switched to.", msg.c_str());
+        }
+    }
+}
+
+shared_ptr<SlowMetrics> InputStreamImpl::getNodeSlowMetrics(const DatanodeInfo & node) {
+    if (slowMetricsMap->get(node) == NULL) {
+        shared_ptr<SlowMetrics> slowMetrics = shared_ptr<SlowMetrics>(new SlowMetrics(
+                conf->getSlowDownstreamThresholdMs(),
+                conf->getSlowDownstreamCount(),
+                conf->getSlowDownstreamIntervals()));
+        slowMetricsMap->put(node, slowMetrics);
+    }
+    return slowMetricsMap->get(node);
+}
+
+bool InputStreamImpl::canSwitchToOtherNode(const DatanodeInfo & excludeNode, shared_ptr<LocatedBlock> locatedBlock) {
+    int unchoosen = 0;
+    for (const DatanodeInfo & dn: locatedBlock->getLocations()) {
+        if (dn == excludeNode) {
+            unchoosen++;
+        } else if (std::binary_search(failedNodes.begin(), failedNodes.end(), dn)) {
+            unchoosen++;
+        } else if (slowNodeCache->containsKey(dn)) {
+            unchoosen++;
+        }
+    }
+    if (unchoosen >= locatedBlock->getLocations().size()) {
+        return false;
+    }
+    return true;
+}
+
+void InputStreamImpl::slowNodeMetrics(long elapsedTime, shared_ptr<LocatedBlock> block,
+                                      const DatanodeInfo & datanodeInfo) {
+    if (!dfsClientReadWriteMetricEnable) {
+        return;
+    }
+    shared_ptr<SlowMetrics> metrics = getNodeSlowMetrics(datanodeInfo);
+    bool inSlowState = metrics->inSlowState();
+    bool ret = metrics->putMetric(elapsedTime);
+    if (ret) {
+        std::string msg = "read block " + block->toStringDetailed() +
+                          " of file " + path + " from datanode " +
+                          datanodeInfo.getXferAddr() + " slow over threshold " +
+                          std::to_string(elapsedTime) + "ms";
+        LOG(WARNING, "%s", msg.c_str());
+    }
+    if (metrics->inSlowState() && !inSlowState) {
+        std::string msg = "read block " + block->toStringDetailed() +
+                          " of file " + path + " from datanode " +
+                          datanodeInfo.getXferAddr() + " meet slow metric: " +
+                          std::to_string((long) metrics->getAvg()) + "ms";
+        LOG(WARNING, "%s", msg.c_str());
     }
 }
 

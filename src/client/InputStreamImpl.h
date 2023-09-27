@@ -43,6 +43,8 @@
 #include "server/LocatedBlocks.h"
 #include "SessionConfig.h"
 #include "Unordered.h"
+#include "SlowNodeCache.h"
+#include "SlowMetricsMap.h"
 
 #ifdef MOCK
 #include "TestDatanodeStub.h"
@@ -125,6 +127,11 @@ protected:
     void setupBlockReader(bool temporaryDisableLocalRead);
     void updateBlockInfos();
     void updateBlockInfos(bool need);
+    void addToSlowNodes(const DatanodeInfo & dnInfo);
+    void checkSlowNode(shared_ptr<LocatedBlock> block, const DatanodeInfo & datanodeInfo);
+    shared_ptr<SlowMetrics> getNodeSlowMetrics(const DatanodeInfo & node);
+    bool canSwitchToOtherNode(const DatanodeInfo & excludeNode, shared_ptr<LocatedBlock> locatedBlock);
+    void slowNodeMetrics(long elapsedTime, shared_ptr<LocatedBlock> block, const DatanodeInfo & datanodeInfo);
 
 protected:
     bool closed;
@@ -149,6 +156,10 @@ protected:
     std::string path;
     std::vector<DatanodeInfo> failedNodes;
     std::vector<char> localReaderBuffer;
+    SlowNodeCache *slowNodeCache;
+    bool dfsClientReadWriteMetricEnable;
+    bool dfsClientSlowDatanodeKickoutEnable;
+    shared_ptr<SlowMetricsMap> slowMetricsMap;
 
 #ifdef MOCK
 private:

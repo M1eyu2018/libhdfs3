@@ -107,6 +107,7 @@ public:
   MOCK_METHOD3(getFileBlockLocations, std::vector<Hdfs::BlockLocation> (const char * path, int64_t start, int64_t len));
   MOCK_METHOD2(listAllDirectoryItems, std::vector<Hdfs::FileStatus> (const char * path, bool needLocation));
   MOCK_METHOD0(getPeerCache, Hdfs::Internal::PeerCache &());
+  MOCK_METHOD0(getSlowNodeCache, Hdfs::Internal::SlowNodeCache &());
 };
 
 #endif /* _HDFS_LIBHDFS3_MOCK_MOCKSOCKET_H_ */

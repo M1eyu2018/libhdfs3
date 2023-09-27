@@ -69,6 +69,10 @@ SessionConfig::SessionConfig(const Config & conf) {
             &useMappedFile, "input.localread.mappedfile", true
         }, {
             &legacyLocalBlockReader, "dfs.client.use.legacy.blockreader.local", false
+        }, {
+            &dfsClientReadWriteMetricEnable, "dfs.client.read.write.metric.enable", false
+        }, {
+            &dfsClientSlowDatanodeKickoutEnable, "dfs.client.slow.datanode.kickout.enable", false
         }
     };
     ConfigDefault<int32_t> i32Values[] = {
@@ -134,11 +138,21 @@ SessionConfig::SessionConfig(const Config & conf) {
             &socketCacheCapacity, "dfs.client.socketcache.capacity", 16, bind(CheckRangeGE<int32_t>, _1, _2, 0)
         }, {
             &stripeReaderThreadPoolSize, "dfs.client.read.striped.thread-pool.size", 64
+        }, {
+            &slowNodeCacheCapacity, "dfs.client.slownodecache.capacity", 100, bind(CheckRangeGE<int32_t>, _1, _2, 0)
         }
     };
     ConfigDefault<int64_t> i64Values [] = {
         {
             &defaultBlockSize, "dfs.default.blocksize", 64 * 1024 * 1024, bind(CheckMultipleOf<int64_t>, _1, _2, 512)
+        }, {
+            &slowNodeCacheExpiry, "dfs.client.slownodecache.expiryMsec", 43200000, bind(CheckRangeGE<int64_t>, _1, _2, 0)
+        }, {
+            &slowDownstreamThresholdMs, "dfs.client.slow.downstream.warning.threshold.ms", 1000, bind(CheckRangeGE<int64_t>, _1, _2, 0)
+        }, {
+            &slowDownstreamCount, "dfs.client.slow.downstream.warning.count", 20, bind(CheckRangeGE<int64_t>, _1, _2, 0)
+        }, {
+            &slowDownstreamIntervals, "dfs.client.slow.downstream.warning.interval.seconds", 300, bind(CheckRangeGE<int64_t>, _1, _2, 0)
         }
     };
     ConfigDefault<std::string> strValues [] = {
