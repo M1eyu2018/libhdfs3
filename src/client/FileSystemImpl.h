@@ -487,6 +487,15 @@ public:
         return *peerCache;
     }
 
+    /**
+     * Get the slow node cache.
+     *
+     * @return return the slow node cache.
+     */
+    SlowNodeCache& getSlowNodeCache() {
+        return *slowNodeCache;
+    }
+
 private:
     Config conf;
     FileSystemKey key;
@@ -499,6 +508,7 @@ private:
     std::string tokenService;
     std::string workingDir;
     UserInfo user;
+    shared_ptr<SlowNodeCache> slowNodeCache;
 #ifdef MOCK
 private:
     Hdfs::Mock::NamenodeStub * stub;

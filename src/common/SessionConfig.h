@@ -311,6 +311,34 @@ public:
         return stripeReaderThreadPoolSize;
     }
 
+    int64_t getSlowNodeCacheExpiry() const {
+        return slowNodeCacheExpiry;
+    }
+
+    int32_t getSlowNodeCacheCapacity() const {
+        return slowNodeCacheCapacity;
+    }
+
+    bool getDfsClientReadWriteMetricEnable() const {
+        return dfsClientReadWriteMetricEnable;
+    }
+
+    bool getDfsClientSlowDatanodeKickoutEnable() const {
+        return dfsClientSlowDatanodeKickoutEnable;
+    }
+
+    int64_t getSlowDownstreamThresholdMs() const {
+        return slowDownstreamThresholdMs;
+    }
+
+    int64_t getSlowDownstreamCount() const {
+        return slowDownstreamCount;
+    }
+
+    int64_t getSlowDownstreamIntervals() const {
+        return slowDownstreamIntervals;
+    }
+
 public:
     /*
      * rpc configure
@@ -356,6 +384,13 @@ public:
     int32_t socketCacheExpiry;
     std::string domainSocketPath;
     int32_t stripeReaderThreadPoolSize;
+    int32_t slowNodeCacheCapacity;
+    int64_t slowNodeCacheExpiry;
+    bool dfsClientReadWriteMetricEnable;
+    bool dfsClientSlowDatanodeKickoutEnable;
+    int64_t slowDownstreamThresholdMs;
+    int64_t slowDownstreamCount;
+    int64_t slowDownstreamIntervals;
 
     /*
      * OutputStream configure

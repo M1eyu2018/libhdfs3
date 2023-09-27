@@ -124,6 +124,31 @@ public:
         return tokens;
     }
 
+    const std::string formatLocs() const {
+        std::stringstream ss;
+        ss.imbue(std::locale::classic());
+        ss << "[";
+        for (int i = 0; i < locs.size(); ++i) {
+            const DatanodeInfo & datanodeInfo = locs[i];
+            if (i == 0) ss << datanodeInfo.getXferAddr();
+            else ss << "," << datanodeInfo.getXferAddr();
+        }
+        ss << "]";
+        return ss.str();
+    }
+
+    const std::string toStringDetailed() const {
+        std::stringstream ss;
+        ss.imbue(std::locale::classic());
+        ss << "LocatedBlock{" << toString()
+            << "; getBlockSize()=" << getNumBytes()
+            << "; corrupt=" << corrupt
+            << "; offset=" << offset
+            << "; locs=" << formatLocs()
+            << "}";
+        return ss.str();
+    }
+
 private:
     int64_t offset;
     bool corrupt;

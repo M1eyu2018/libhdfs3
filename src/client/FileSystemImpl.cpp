@@ -122,6 +122,7 @@ FileSystemImpl::FileSystemImpl(const FileSystemKey& key, const Config& c)
     clientName = ss.str();
     workingDir = std::string("/user/") + user.getEffectiveUser();
     peerCache = shared_ptr<PeerCache>(new PeerCache(sconf));
+    slowNodeCache = shared_ptr<SlowNodeCache>(new SlowNodeCache(sconf));
 #ifdef MOCK
     stub = NULL;
 #endif

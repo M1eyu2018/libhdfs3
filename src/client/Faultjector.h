@@ -49,6 +49,7 @@ private:
     bool testAckKill = false;
     bool closePipeline = false;
     bool createOutputStreamFailed = false;
+    int32_t readSlowNodeCount = 0;
     std::mutex mtx;
 
 public:
@@ -113,6 +114,14 @@ public:
             return true;
         }
         return false;
+    }
+
+    void testSlowNodeMetrics(const DatanodeInfo & datanodeInfo) {
+        if (readSlowNodeCount > 0) {
+            readSlowNodeCount--;
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+        }
+        return;
     }
 
 };

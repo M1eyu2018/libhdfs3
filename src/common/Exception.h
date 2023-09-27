@@ -536,6 +536,20 @@ class RecoveryInProgressException : public HdfsException {
   static const char * ReflexName;
 };
 
+class SlowNodeException : public HdfsException {
+ public:
+    SlowNodeException(const std::string & arg, const char * file,
+                      int line, const char * stack)
+      : HdfsException(arg, file, line, stack) {
+  }
+
+  ~SlowNodeException() throw () {
+  }
+
+ public:
+  static const char * ReflexName;
+};
+
 }
 
 #endif /* _HDFS_LIBHDFS3_COMMON_EXCEPTION_H_ */
