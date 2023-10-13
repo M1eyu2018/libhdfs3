@@ -339,6 +339,22 @@ public:
         return slowDownstreamIntervals;
     }
 
+    int32_t getTreatSlowNodeAsBadNodeThreshold() const {
+        return treatSlowNodeAsBadNodeThreshold;
+    }
+
+    int64_t getSlowDiskThresholdMs() const {
+        return slowDiskThresholdMs;
+    }
+
+    int64_t getSlowDiskCount() const {
+        return slowDiskCount;
+    }
+
+    int64_t getSlowDiskIntervals() const {
+        return slowDiskIntervals;
+    }
+
 public:
     /*
      * rpc configure
@@ -405,6 +421,10 @@ public:
     int32_t packetPoolSize;
     int32_t heartBeatInterval;
     int32_t closeFileTimeout;
+    int32_t treatSlowNodeAsBadNodeThreshold;
+    int64_t slowDiskThresholdMs;
+    int64_t slowDiskCount;
+    int64_t slowDiskIntervals;
 
 };
 

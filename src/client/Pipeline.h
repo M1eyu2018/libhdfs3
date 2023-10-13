@@ -40,6 +40,7 @@
 #include "server/Namenode.h"
 #include "SessionConfig.h"
 #include "Thread.h"
+#include "SlowMetrics.h"
 
 #include <vector>
 #include <deque>
@@ -193,6 +194,8 @@ private:
                   const std::vector<DatanodeInfo> & targets,
                   const Token & token);
     int findNewDatanode(const std::vector<DatanodeInfo> & original);
+    void checkSlowNodes(long seqno, PipelineAck ack, int i);
+    void resetSlowNodeMetrics();
 
 protected:
     static void checkBadLinkFormat(const std::string & node);
@@ -221,7 +224,18 @@ protected:
     std::vector<DatanodeInfo> nodes;
     std::vector<std::string> storageIDs;
     int64_t fileId;
-
+    std::map<DatanodeInfo, int> slowNodeMap;
+    int treatSlowNodeAsBadNodeThreshold;
+    bool dfsClientReadWriteMetricEnable;
+    bool dfsClientSlowDatanodeKickoutEnable;
+    long dfsClientSlowDownstreamThresholdNs;
+    long dfsClientSlowDownstreamCount;
+    long dfsClientSlowDownstreamIntervals;
+    long dfsClientSlowDiskThresholdNs;
+    long dfsClientSlowDiskCount;
+    long dfsClientSlowDiskIntervals;
+    std::vector<shared_ptr<SlowMetrics>> slowDownstreamMetrics;
+    std::vector<shared_ptr<SlowMetrics>> slowDiskMetrics;
 };
 
 class StripedPipelineImpl : public PipelineImpl {
