@@ -28,10 +28,49 @@
 #ifndef _HDFS_LIBHDFS3_CLIENT_PIPELINEACK_H_
 #define _HDFS_LIBHDFS3_CLIENT_PIPELINEACK_H_
 
+#include <string>
+
 #include "datatransfer.pb.h"
+#include "LongBitFormat.h"
 
 namespace Hdfs {
 namespace Internal {
+
+enum class SLOW {
+    NORMAL, SLOW
+};
+
+class StatusFormat {
+public:
+    static int setSLOW(int old, SLOW slow) {
+        return (int) SLOW_BITS->BITS->combine(static_cast<long>(slow), old);
+    }
+
+    static SLOW getSLOW(int header) {
+        return SLOW((int) SLOW_BITS->BITS->retrieve(header));
+    }
+
+private:
+    StatusFormat(std::string name, int offset, int bits) {
+        BITS = std::shared_ptr<LongBitFormat>(new LongBitFormat(name, offset, bits, 0));
+    }
+
+private:
+    static const int STATUS_LENGTH = 4;
+    static const int RESERVED_LENGTH = 1;
+    static const int ECN_BITS_LENGTH = 2;
+    static const int SLOW_BITS_LENGTH = 1;
+    // offset can't be greater than 64 bits
+    static const int STATUS_OFFSET = 0;
+    static const int RESERVED_OFFSET = STATUS_LENGTH;
+    static const int ECN_BITS_OFFSET = STATUS_LENGTH + RESERVED_LENGTH;
+    static const int SLOW_BITS_OFFSET = STATUS_LENGTH + RESERVED_LENGTH + ECN_BITS_OFFSET;
+    std::shared_ptr<LongBitFormat> BITS;
+    static std::shared_ptr<StatusFormat> STATUS;
+    static std::shared_ptr<StatusFormat> RESERVED;
+    static std::shared_ptr<StatusFormat> ECN_BITS;
+    static std::shared_ptr<StatusFormat> SLOW_BITS;
+};
 
 class PipelineAck {
 public:
@@ -79,6 +118,52 @@ public:
     void reset() {
         proto.Clear();
         invalid = true;
+    }
+
+    int getHeaderFlag(int i) {
+        if (proto.flag_size() > 0) {
+            return proto.flag(i);
+        } else {
+            return combineHeader(SLOW::NORMAL);
+        }
+    }
+
+    void setHeaderFlag(int i, int header) {
+        proto.set_flag(i, header);
+    }
+
+    static int combineHeader(SLOW slow) {
+        int header = 0;
+        header = StatusFormat::setSLOW(header, slow);
+        return header;
+    }
+
+    static SLOW getSLOWFromHeader(int header) {
+        return StatusFormat::getSLOW(header);
+    }
+
+    long getDiskTime(int i) {
+        if (proto.disktimenanos_size() > 0) {
+            return proto.disktimenanos(i);
+        } else {
+            return 0L;
+        }
+    }
+
+    void setDiskTime(int i, int diskTime) {
+        proto.set_disktimenanos(i, diskTime);
+    }
+
+    long getDownstreamTime(int i) {
+        if (proto.downstreamtimenanos_size() > 0) {
+            return proto.downstreamtimenanos(i);
+        } else {
+            return 0L;
+        }
+    }
+
+    void setDownstreamTime(int i, int downstreamTime) {
+        proto.set_downstreamtimenanos(i, downstreamTime);
     }
 
 private:

@@ -140,6 +140,8 @@ SessionConfig::SessionConfig(const Config & conf) {
             &stripeReaderThreadPoolSize, "dfs.client.read.striped.thread-pool.size", 64
         }, {
             &slowNodeCacheCapacity, "dfs.client.slownodecache.capacity", 100, bind(CheckRangeGE<int32_t>, _1, _2, 0)
+        }, {
+            &treatSlowNodeAsBadNodeThreshold, "dfs.client.mark.slownode.as.badnode.threshold", 10, bind(CheckRangeGE<int32_t>, _1, _2, 0)
         }
     };
     ConfigDefault<int64_t> i64Values [] = {
@@ -153,6 +155,12 @@ SessionConfig::SessionConfig(const Config & conf) {
             &slowDownstreamCount, "dfs.client.slow.downstream.warning.count", 20, bind(CheckRangeGE<int64_t>, _1, _2, 0)
         }, {
             &slowDownstreamIntervals, "dfs.client.slow.downstream.warning.interval.seconds", 300, bind(CheckRangeGE<int64_t>, _1, _2, 0)
+        }, {
+            &slowDiskThresholdMs, "dfs.client.slow.disk.warning.threshold.ms", 1000, bind(CheckRangeGE<int64_t>, _1, _2, 0)
+        }, {
+            &slowDiskCount, "dfs.client.slow.disk.warning.count", 20, bind(CheckRangeGE<int64_t>, _1, _2, 0)
+        }, {
+            &slowDiskIntervals, "dfs.client.slow.disk.warning.interval.seconds", 300, bind(CheckRangeGE<int64_t>, _1, _2, 0)
         }
     };
     ConfigDefault<std::string> strValues [] = {

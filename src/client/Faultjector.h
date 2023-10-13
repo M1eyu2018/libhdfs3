@@ -24,6 +24,8 @@
 
 #include <mutex>
 
+#include "PipelineAck.h"
+
 namespace Hdfs {
 
 namespace Internal {
@@ -50,6 +52,7 @@ private:
     bool closePipeline = false;
     bool createOutputStreamFailed = false;
     int32_t readSlowNodeCount = 0;
+    int32_t writeSlowNodeCount = 0;
     std::mutex mtx;
 
 public:
@@ -122,6 +125,15 @@ public:
             std::this_thread::sleep_for(std::chrono::seconds(2));
         }
         return;
+    }
+
+    void testSlowNodeMetricsForPipeline(const DatanodeInfo & datanodeInfo, PipelineAck & ack, int i) {
+        if (writeSlowNodeCount > 0) {
+            writeSlowNodeCount--;
+            int header = ack.getHeaderFlag(i);
+            header = StatusFormat::setSLOW(header, SLOW::SLOW);
+            ack.setHeaderFlag(i, header);
+        }
     }
 
 };

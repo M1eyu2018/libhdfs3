@@ -69,6 +69,15 @@ PipelineImpl::PipelineImpl(bool append, const char * path, const SessionConfig &
     readTimeout = conf.getOutputReadTimeout();
     writeTimeout = conf.getOutputWriteTimeout();
     clientName = filesystem->getClientName();
+    treatSlowNodeAsBadNodeThreshold = conf.getTreatSlowNodeAsBadNodeThreshold();
+    dfsClientReadWriteMetricEnable = conf.getDfsClientReadWriteMetricEnable();
+    dfsClientSlowDatanodeKickoutEnable = conf.getDfsClientSlowDatanodeKickoutEnable();
+    dfsClientSlowDownstreamThresholdNs = conf.getSlowDownstreamThresholdMs() * 1000000;
+    dfsClientSlowDownstreamCount = conf.getSlowDownstreamCount();
+    dfsClientSlowDownstreamIntervals = conf.getSlowDownstreamIntervals();
+    dfsClientSlowDiskThresholdNs = conf.getSlowDiskThresholdMs() * 1000000;
+    dfsClientSlowDiskCount = conf.getSlowDiskCount();
+    dfsClientSlowDiskIntervals = conf.getSlowDiskIntervals();
 
     if (append) {
         LOG(DEBUG2, "create pipeline for file %s to append to %s at position %" PRId64,
@@ -85,6 +94,8 @@ PipelineImpl::PipelineImpl(bool append, const char * path, const SessionConfig &
         buildForNewBlock();
         stage = DATA_STREAMING;
     }
+
+    resetSlowNodeMetrics();
 }
 
 int PipelineImpl::findNewDatanode(const std::vector<DatanodeInfo> & original) {
@@ -170,6 +181,7 @@ bool PipelineImpl::addDatanodeToPipeline(const std::vector<DatanodeInfo> & exclu
                 src.formatAddress().c_str(), targets[0].formatAddress().c_str(), path.c_str());
             transfer(*lastBlock, src, targets, lb->getToken());
             errorIndex = -1;
+            resetSlowNodeMetrics();
             return true;
         }
     } catch (const HdfsCanceled & e) {
@@ -695,6 +707,23 @@ void PipelineImpl::processAck(PipelineAck & ack) {
                   packet.getSeqno(), seqno, lastBlock->toString().c_str());
         }
 
+        int slowNodesFromAck = 0;
+        for (int i = ack.getNumOfReplies() - 1; i >= 0; --i) {
+            // test slow node
+            FaultInjector::get().testSlowNodeMetricsForPipeline(nodes[i], ack, i);
+            if (PipelineAck::getSLOWFromHeader(ack.getHeaderFlag(i)) == SLOW::SLOW) {
+                ++slowNodesFromAck;
+            }
+            checkSlowNodes(seqno, ack, i);
+        }
+
+        if (slowNodesFromAck == 0) {
+            if (!slowNodeMap.empty()) {
+                slowNodeMap.clear();
+                LOG(DEBUG1, "slowNodeMap clear");
+            }
+        }
+
         int64_t tmp = packet.getLastByteOffsetBlock();
         bytesAcked = tmp > bytesAcked ? tmp : bytesAcked;
         assert(lastBlock);
@@ -834,10 +863,99 @@ shared_ptr<LocatedBlock> PipelineImpl::close(shared_ptr<Packet> lastPacket) {
     waitForAcks(true);
     sock.reset();
     lastBlock->setNumBytes(bytesAcked);
+    slowDownstreamMetrics.clear();
+    slowDiskMetrics.clear();
     LOG(DEBUG2, "close pipeline for file %s, block %s with length %" PRId64,
         path.c_str(), lastBlock->toString().c_str(),
         lastBlock->getNumBytes());
     return lastBlock;
+}
+
+void PipelineImpl::checkSlowNodes(long seqno, PipelineAck ack, int i) {
+    if (!dfsClientReadWriteMetricEnable) {
+        return;
+    }
+    LOG(DEBUG1, "block:%s datanode[%d]:%s", lastBlock->toString().c_str(), i, nodes[i].formatAddress().c_str());
+    LOG(DEBUG1, "%ld disk time:%ld", seqno, ack.getDiskTime(i));
+    slowDiskMetrics[i]->putMetric(ack.getDiskTime(i));
+    if (slowDiskMetrics[i]->inSlowState()) {
+        std::string msg = "Writing file " + path + " met slow disk: " +
+                          std::to_string(((long) slowDiskMetrics[i]->getAvg()) / 1000000) +
+                          " ms for " + lastBlock->toString() + " from datanode " + nodes[i].formatAddress();
+        LOG(INFO, "%s", msg.c_str());
+        if (nodes.size() > 1) {
+            if (dfsClientSlowDatanodeKickoutEnable) {
+                errorIndex = i; // mark slow datanode
+                THROW(HdfsIOException, "%s", msg.c_str());
+            } else {
+                LOG(WARNING, "%s, but do not kick out it automatically!", msg.c_str());
+            }
+        } else {
+            LOG(WARNING, "%s, but no other datanode to retry!", msg.c_str());
+        }
+    }
+    LOG(DEBUG1, "%ld downstream time:%ld", seqno, ack.getDownstreamTime(i));
+    slowDownstreamMetrics[i]->putMetric(ack.getDownstreamTime(i));
+    if (slowDownstreamMetrics[i]->inSlowState()) {
+        std::string msg = "Writing file " + path + " met slow datanode: " +
+                          std::to_string(((long) slowDownstreamMetrics[i]->getAvg()) / 1000000) +
+                          " ms for " + lastBlock->toString() + " from datanode " + nodes[i].formatAddress();
+        LOG(INFO, "%s", msg.c_str());
+        if (nodes.size() > 1) {
+            if (dfsClientSlowDatanodeKickoutEnable) {
+                errorIndex = i; // mark slow datanode
+                THROW(HdfsIOException, "%s", msg.c_str());
+            } else {
+                LOG(WARNING, "%s, but do not kick out it automatically!", msg.c_str());
+            }
+        } else {
+            LOG(WARNING, "%s, but no other datanode to retry!", msg.c_str());
+        }
+    }
+    if (PipelineAck::getSLOWFromHeader(ack.getHeaderFlag(i)) == SLOW::SLOW) {
+        if (slowNodeMap.find(nodes[i]) == slowNodeMap.end()) {
+            slowNodeMap[nodes[i]] = 1;
+        } else {
+            int count = slowNodeMap[nodes[i]];
+            count++;
+            if (count >= treatSlowNodeAsBadNodeThreshold) {
+                std::string msg = "Receive reply from slowNode " + nodes[i].formatAddress() +
+                                  " for continuous " + std::to_string(treatSlowNodeAsBadNodeThreshold) +
+                                  " times, treating it as badNode";
+                LOG(INFO, "%s", msg.c_str());
+                if (nodes.size() > 1) {
+                    if (dfsClientSlowDatanodeKickoutEnable) {
+                        errorIndex = i; // mark slow datanode
+                        THROW(HdfsIOException, "%s", msg.c_str());
+                    } else {
+                        LOG(WARNING, "%s, but do not kick out it automatically!", msg.c_str());
+                    }
+                } else {
+                    LOG(WARNING, "%s, but no other datanode to retry!", msg.c_str());
+                }
+                slowNodeMap.erase(nodes[i]);
+            } else {
+                slowNodeMap[nodes[i]] = count;
+            }
+        }
+    }
+}
+
+void PipelineImpl::resetSlowNodeMetrics() {
+    if (dfsClientReadWriteMetricEnable && !nodes.empty()) {
+        this->slowDownstreamMetrics.clear();
+        this->slowDiskMetrics.clear();
+        for (int i = 0; i < nodes.size(); i++) {
+            this->slowDownstreamMetrics.push_back(shared_ptr<SlowMetrics>(new SlowMetrics(
+                    dfsClientSlowDownstreamThresholdNs,
+                    dfsClientSlowDownstreamCount,
+                    dfsClientSlowDownstreamIntervals)));
+            this->slowDiskMetrics.push_back(shared_ptr<SlowMetrics>(new SlowMetrics(
+                    dfsClientSlowDiskThresholdNs,
+                    dfsClientSlowDiskCount,
+                    dfsClientSlowDiskIntervals)));
+        }
+    }
 }
 
 StripedPipelineImpl::StripedPipelineImpl(const char * path, SessionConfig & conf,
