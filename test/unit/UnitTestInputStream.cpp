@@ -70,6 +70,7 @@ public:
     MOCK_METHOD1(setLastBlock, void(shared_ptr<LocatedBlock>));
     MOCK_CONST_METHOD0(getEcPolicy, shared_ptr<ECPolicy> ());
     MOCK_METHOD1(setEcPolicy, void (shared_ptr<ECPolicy>));
+    MOCK_METHOD2(insertRange, void (int64_t offset, std::vector<LocatedBlock> & newBlocks));
 };
 
 class MockDatanodeStub: public TestDatanodeStub {

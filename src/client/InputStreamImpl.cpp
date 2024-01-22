@@ -232,6 +232,7 @@ void InputStreamImpl::updateBlockInfos(bool need) {
             }
 
             if (need) {
+                lock_guard<std::recursive_mutex> lock(infoMutex);
                 filesystem->getBlockLocations(path, cursor, prefetchSize, *lbs);
             }
 
@@ -333,7 +334,30 @@ bool InputStreamImpl::choseBestNode() {
     return false;
 }
 
+bool InputStreamImpl::choseBestNode(const LocatedBlock * curBlock, std::vector<DatanodeInfo> & failedNodes,
+                                    DatanodeInfo & curNode) {
+    const std::vector<DatanodeInfo> & nodes = curBlock->getLocations();
+
+    for (size_t i = 0; i < nodes.size(); ++i) {
+        if (std::binary_search(failedNodes.begin(), failedNodes.end(),
+                               nodes[i])) {
+            continue;
+        }
+
+        curNode = nodes[i];
+        return true;
+    }
+
+    return false;
+}
+
 bool InputStreamImpl::isLocalNode() {
+    static const unordered_set<std::string> LocalAddrSet = BuildLocalAddrSet();
+    bool retval = LocalAddrSet.find(curNode.getIpAddr()) != LocalAddrSet.end();
+    return retval;
+}
+
+bool InputStreamImpl::isLocalNode(DatanodeInfo & curNode) {
     static const unordered_set<std::string> LocalAddrSet = BuildLocalAddrSet();
     bool retval = LocalAddrSet.find(curNode.getIpAddr()) != LocalAddrSet.end();
     return retval;
@@ -427,6 +451,98 @@ void InputStreamImpl::setupBlockReader(bool temporaryDisableLocalRead) {
     }
 }
 
+void InputStreamImpl::setupBlockReader(bool temporaryDisableLocalRead, shared_ptr<BlockReader> & blockReader,
+                                       const LocatedBlock * curBlock, int64_t start, int64_t end,
+                                       std::vector<DatanodeInfo> & failedNodes, DatanodeInfo & curNode) {
+    bool lastReadFromLocal = false;
+    exception_ptr lastException;
+
+    while (true) {
+        if (!choseBestNode(curBlock, failedNodes, curNode)) {
+            try {
+                if (lastException) {
+                    rethrow_exception(lastException);
+                }
+            } catch (...) {
+                NESTED_THROW(HdfsIOException,
+                             "InputStreamImpl: all nodes have been tried and no valid replica can be read for Block: %s.",
+                             curBlock->toString().c_str());
+            }
+
+            THROW(HdfsIOException,
+                  "InputStreamImpl: all nodes have been tried and no valid replica can be read for Block: %s.",
+                  curBlock->toString().c_str());
+        }
+
+        try {
+            int64_t offset, len;
+            offset = start;
+            assert(offset >= 0);
+            len = end - start + 1;
+            assert(len > 0);
+
+            bool readFromUnderConstructedBlock = curBlock->isLastBlock();
+            if (!temporaryDisableLocalRead && !lastReadFromLocal &&
+                !readFromUnderConstructedBlock && localRead && isLocalNode(curNode)) {
+                lastReadFromLocal = true;
+
+                std::vector<char> localReaderBuffer;
+                shared_ptr<ReadShortCircuitInfo> info;
+                ReadShortCircuitInfoBuilder builder(curNode, auth, *conf);
+
+                try {
+                    info = builder.fetchOrCreate(*curBlock, curBlock->getToken());
+
+                    if (!info) {
+                        continue;
+                    }
+
+                    assert(info->isValid());
+                    blockReader = shared_ptr<BlockReader>(
+                            new LocalBlockReader(info, *curBlock, offset, verify,
+                                                 *conf, localReaderBuffer));
+                } catch (...) {
+                    if (info) {
+                        info->setValid(false);
+                    }
+
+                    throw;
+                }
+            } else {
+                const char * clientName = filesystem->getClientName();
+                lastReadFromLocal = false;
+                blockReader = shared_ptr<BlockReader>(new RemoteBlockReader(
+                        *curBlock, curNode, *peerCache, offset, len,
+                        curBlock->getToken(), clientName, verify, *conf));
+            }
+
+            break;
+        } catch (const HdfsIOException & e) {
+            lastException = current_exception();
+            std::string buffer;
+
+            if (lastReadFromLocal) {
+                LOG(LOG_ERROR,
+                    "cannot setup block reader for Block: %s file %s on Datanode: %s.\n%s\n"
+                    "retry the same node but disable read shortcircuit feature",
+                    curBlock->toString().c_str(), path.c_str(),
+                    curNode.formatAddress().c_str(), GetExceptionDetail(e, buffer));
+                /*
+                 * do not add node into failedNodes since we will retry the same node but
+                 * disable local block reading
+                 */
+            } else {
+                LOG(LOG_ERROR,
+                    "cannot setup block reader for Block: %s file %s on Datanode: %s.\n%s\nretry another node",
+                    curBlock->toString().c_str(), path.c_str(),
+                    curNode.formatAddress().c_str(), GetExceptionDetail(e, buffer));
+                failedNodes.push_back(curNode);
+                std::sort(failedNodes.begin(), failedNodes.end());
+            }
+        }
+    }
+}
+
 void InputStreamImpl::open(shared_ptr<FileSystemInter> fs, const char * path,
                            bool verifyChecksum) {
     if (NULL == path || 0 == strlen(path)) {
@@ -474,6 +590,22 @@ int32_t InputStreamImpl::read(char * buf, int32_t size) {
         int32_t done = readInternal(buf, size);
         LOG(DEBUG3, "%p read file %s size is %d, offset %" PRId64 " done %d, next pos %" PRId64, this, path.c_str(), size,
             prvious, done, cursor);
+        return done;
+    } catch (const HdfsEndOfStream & e) {
+        throw;
+    } catch (...) {
+        lastError = current_exception();
+        throw;
+    }
+}
+
+int32_t InputStreamImpl::pread(char * buf, int32_t size, int64_t position) {
+    checkStatus();
+
+    try {
+        int32_t done = preadInternal(buf, size, position);
+        LOG(DEBUG3, "%p pread file %s size is %d, offset %" PRId64 " done %d" PRId64, this, path.c_str(), size,
+            position, done);
         return done;
     } catch (const HdfsEndOfStream & e) {
         throw;
@@ -664,6 +796,239 @@ int32_t InputStreamImpl::readInternal(char * buf, int32_t size) {
         NESTED_THROW(HdfsIOException,
                      "InputStreamImpl: cannot read file: %s, from position %" PRId64 ", size: %d.",
                      path.c_str(), cursor, size);
+    }
+}
+
+/**
+ * To read data from hdfs.
+ * @param buf the buffer used to filled.
+ * @param size buffer size.
+ * @param position the position to seek.
+ * @return return the number of bytes filled in the buffer, it may less than size.
+ */
+int32_t InputStreamImpl::preadInternal(char * buf, int32_t size, int64_t position) {
+    int64_t cursor = position;
+    try {
+        int64_t filelen = getFileLength();
+        if ((position < 0) || (position >= filelen)) {
+            return -1;
+        }
+        int32_t realLen = size;
+        if ((position + size) > filelen) {
+            realLen = (int32_t)(filelen - position);
+        }
+
+        // determine the block and byte range within the block
+        // corresponding to position and realLen
+        std::vector<const LocatedBlock *> blockRange = getBlockRange(position, (int64_t)realLen);
+        int32_t remaining = realLen;
+        int32_t bytesHasRead = 0;
+        for (const LocatedBlock * blk : blockRange) {
+            int64_t targetStart = position - blk->getOffset();
+            int32_t bytesToRead = std::min(remaining, (int32_t)(blk->getNumBytes() - targetStart));
+            int64_t targetEnd = targetStart + bytesToRead - 1;
+
+            fetchBlockByteRange(blk, targetStart, targetEnd, buf + bytesHasRead);
+
+            bytesHasRead += bytesToRead;
+            remaining -= bytesToRead;
+            position += bytesToRead;
+        }
+        assert(remaining == 0);
+        return realLen;
+    } catch (const HdfsCanceled & e) {
+        throw;
+    } catch (const HdfsEndOfStream & e) {
+        throw;
+    } catch (const HdfsException & e) {
+        /*
+         * wrap the underlying error and rethrow.
+         */
+        NESTED_THROW(HdfsIOException,
+                     "InputStreamImpl: cannot read file: %s, from position %" PRId64 ", size: %d.",
+                     path.c_str(), cursor, size);
+    }
+}
+
+/**
+ * Get blocks in the specified range.
+ * Fetch them from the namenode if not cached. This function
+ * will not get a read request beyond the EOF.
+ * @param offset starting offset in file
+ * @param length length of data
+ * @return consequent segment of located blocks
+ * @throws IOException
+ */
+std::vector<const LocatedBlock *> InputStreamImpl::getBlockRange(int64_t offset, int64_t length) {
+    // getFileLength(): returns total file length
+    // locatedBlocks.getFileLength(): returns length of completed blocks
+    if (offset >= getFileLength()) {
+        THROW(HdfsIOException, "Offset: %" PRId64 " exceeds file length: %" PRId64, offset, getFileLength());
+    }
+    lock_guard<std::recursive_mutex> lock(infoMutex);
+    std::vector<const LocatedBlock *> blocks;
+    int64_t lengthOfCompleteBlk = lbs->getFileLength();
+    bool readOffsetWithinCompleteBlk = offset < lengthOfCompleteBlk;
+    bool readLengthPastCompleteBlk = offset + length > lengthOfCompleteBlk;
+
+    if (readOffsetWithinCompleteBlk) {
+        // get the blocks of finalized (completed) block range
+        blocks = getFinalizedBlockRange(offset, std::min(length, lengthOfCompleteBlk - offset));
+    }
+
+    // get the blocks from incomplete block range
+    if (readLengthPastCompleteBlk) {
+        lbs->getLastBlock()->setLastBlock(true);
+        blocks.push_back(lbs->getLastBlock().get());
+    }
+
+    return blocks;
+}
+
+/**
+ * Get blocks in the specified range.
+ * Includes only the complete blocks.
+ * Fetch them from the namenode if not cached.
+ */
+std::vector<const LocatedBlock *> InputStreamImpl::getFinalizedBlockRange(int64_t offset, int64_t length) {
+    lock_guard<std::recursive_mutex> lock(infoMutex);
+    assert(!lbs);
+    std::vector<const LocatedBlock *> blockRange;
+    // search cached blocks first
+    int64_t remaining = length;
+    int64_t curOff = offset;
+    while(remaining > 0) {
+        const LocatedBlock * blk = fetchBlockAt(curOff, remaining, true);
+        assert(curOff >= blk->getOffset());
+        blockRange.push_back(blk);
+        int64_t bytesRead = blk->getOffset() + blk->getNumBytes() - curOff;
+        remaining -= bytesRead;
+        curOff += bytesRead;
+    }
+    return blockRange;
+}
+
+const LocatedBlock * InputStreamImpl::fetchBlockAt(int64_t offset, int64_t length, bool useCache) {
+    lock_guard<std::recursive_mutex> lock(infoMutex);
+    int targetBlockIdx;
+    const LocatedBlock * lb = lbs->findBlock(offset, targetBlockIdx);
+    if (!lb) { // block is not cached
+        useCache = false;
+    }
+    if (!useCache) { // fetch blocks
+        shared_ptr<LocatedBlocks> newBlocks = shared_ptr < LocatedBlocksImpl > (new LocatedBlocksImpl);
+        if (length == 0) {
+            filesystem->getBlockLocations(path, offset, prefetchSize, *newBlocks);
+        } else {
+            filesystem->getBlockLocations(path, offset, length, *newBlocks);
+        }
+        if (newBlocks->getBlocks().empty()) {
+            THROW(HdfsIOException, "Could not find target position %" PRId64, offset);
+        }
+        lbs->insertRange(targetBlockIdx, newBlocks->getBlocks());
+        lb = lbs->findBlock(offset);
+    }
+    return lb;
+}
+
+void InputStreamImpl::fetchBlockByteRange(const LocatedBlock * curBlock, int64_t start, int64_t end, char * buf) {
+    bool temporaryDisableLocalRead = false;
+    std::string buffer;
+    shared_ptr<BlockReader> blockReader;
+    std::vector<DatanodeInfo> failedNodes;
+    DatanodeInfo curNode;
+    int32_t refetchToken = 1; // only need to get a new access token once
+
+    while (true) {
+        try {
+            /*
+             * Setup block reader here and handle failure.
+             */
+            if (!blockReader) {
+                setupBlockReader(temporaryDisableLocalRead, blockReader, curBlock, start, end, failedNodes, curNode);
+                temporaryDisableLocalRead = false;
+            }
+        } catch (const HdfsInvalidBlockToken & e) {
+            LOG(LOG_ERROR,
+                "InputStreamImpl: failed to read Block: %s file %s, \n%s.",
+                curBlock->toString().c_str(), path.c_str(), GetExceptionDetail(e, buffer));
+            if (refetchToken > 0 && !curBlock->isLastBlock()) {
+                curBlock = fetchBlockAt(start, end - start + 1, false);
+                refetchToken -= 1;
+                continue;
+            }
+            throw;
+        } catch (const HdfsIOException & e) {
+            LOG(LOG_ERROR,
+                "InputStreamImpl: failed to read Block: %s file %s, \n%s.",
+                curBlock->toString().c_str(), path.c_str(), GetExceptionDetail(e, buffer));
+            throw;
+        }
+
+        /*
+         * Block reader has been setup, read from block reader.
+         */
+        try {
+            assert(blockReader);
+            int nread = 0;
+            int ret;
+            int32_t len = (int32_t)(end - start + 1);
+            int32_t remain = len;
+            while (remain > 0) {
+                ret = blockReader->read(buf + nread, remain);
+                if (ret <= 0) {
+                    break;
+                }
+                nread += ret;
+                remain -= ret;
+            }
+
+            if (nread != len) {
+                THROW(HdfsIOException, "truncated return from reader.read(): excpected %d got %d", len, nread);
+            }
+            /*
+             * Exit the loop and function from here if success.
+             */
+            return;
+        } catch (const HdfsIOException & e) {
+            /*
+             * Failed to read from current block reader,
+             * add the current datanode to invalid node list and try again.
+             */
+            LOG(LOG_ERROR,
+                "InputStreamImpl: failed to read Block: %s file %s from Datanode: %s, \n%s, "
+                "retry read again from another Datanode.",
+                curBlock->toString().c_str(), path.c_str(),
+                curNode.formatAddress().c_str(), GetExceptionDetail(e, buffer));
+
+            if (conf->doesNotRetryAnotherNode()) {
+                throw;
+            }
+        } catch (const ChecksumException & e) {
+            LOG(LOG_ERROR,
+                "InputStreamImpl: failed to read Block: %s file %s from Datanode: %s, \n%s, "
+                "retry read again from another Datanode.",
+                curBlock->toString().c_str(), path.c_str(),
+                curNode.formatAddress().c_str(), GetExceptionDetail(e, buffer));
+        }
+
+        /*
+         * Successfully create the block reader but failed to read.
+         * Disable the local block reader and try the same node again.
+         */
+        if (!blockReader || dynamic_cast<LocalBlockReader *>(blockReader.get())) {
+            temporaryDisableLocalRead = true;
+        } else {
+            /*
+             * Remote block reader failed to read, try another node.
+             */
+            LOG(INFO, "IntputStreamImpl: Add invalid datanode %s to failed datanodes and try another datanode again for file %s.",
+                curNode.formatAddress().c_str(), path.c_str());
+            failedNodes.push_back(curNode);
+            std::sort(failedNodes.begin(), failedNodes.end());
+        }
+
+        blockReader.reset();
     }
 }
 

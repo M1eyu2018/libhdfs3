@@ -77,6 +77,15 @@ public:
     int32_t read(char * buf, int32_t size);
 
     /**
+     * To read data from hdfs.
+     * @param buf the buffer used to filled.
+     * @param size buffer size.
+     * @param position the position to seek.
+     * @return return the number of bytes filled in the buffer, it may less than size.
+     */
+    int32_t pread(char * buf, int32_t size, int64_t position);
+
+    /**
      * To read data from hdfs, block until get the given size of bytes.
      * @param buf the buffer used to filled.
      * @param size the number of bytes to be read.
@@ -112,7 +121,18 @@ public:
 protected:
     bool choseBestNode();
     bool isLocalNode();
+    bool isLocalNode(DatanodeInfo & curNode);
     int32_t readInternal(char * buf, int32_t size);
+    int32_t preadInternal(char * buf, int32_t size, int64_t position);
+    std::vector<const LocatedBlock *> getBlockRange(int64_t offset, int64_t length);
+    std::vector<const LocatedBlock *> getFinalizedBlockRange(int64_t offset, int64_t length);
+    const LocatedBlock * fetchBlockAt(int64_t offset, int64_t length, bool useCache);
+    void fetchBlockByteRange(const LocatedBlock * curBlock, int64_t start, int64_t end, char * buf);
+    void setupBlockReader(bool temporaryDisableLocalRead, shared_ptr<BlockReader> & blockReader,
+                          const LocatedBlock * curBlock, int64_t start, int64_t end,
+                          std::vector<DatanodeInfo> & failedNodes, DatanodeInfo & curNode);
+    bool choseBestNode(const LocatedBlock * curBlock, std::vector<DatanodeInfo> & failedNodes,
+                       DatanodeInfo & curNode);
     int32_t readOneBlock(char * buf, int32_t size, bool shouldUpdateMetadataOnFailure);
     int64_t getFileLength();
     int64_t readBlockLength(const LocatedBlock & b);
@@ -144,11 +164,15 @@ protected:
     shared_ptr<BlockReader> blockReader;
     shared_ptr<FileSystemInter> filesystem;
     shared_ptr<LocatedBlock> curBlock;
+    // state shared by stateful and positional read:
+    // (protected by mutex on infoMutex)
     shared_ptr<LocatedBlocks> lbs;
     shared_ptr<SessionConfig> conf;
     std::string path;
     std::vector<DatanodeInfo> failedNodes;
     std::vector<char> localReaderBuffer;
+    // mutex for state shared between read and pread
+    std::recursive_mutex infoMutex;
 
 #ifdef MOCK
 private:
