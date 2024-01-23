@@ -116,9 +116,11 @@ void LocatedBlocksImpl::addAll(std::vector<LocatedBlock> & oldBlocks, int32_t in
     int32_t oldSize = (int32_t)oldBlocks.size();
     int32_t shiftSize = end - start;
     oldBlocks.resize(oldSize + shiftSize);
-    for (int32_t i = index; i < oldSize; ++i) {
+    for (int32_t i = oldSize - 1; i >= index; --i) {
         oldBlocks[i + shiftSize] = oldBlocks[i];
-        oldBlocks[i] = newBlocks[i - index];
+    }
+    for (int32_t i = 0; i < shiftSize; ++i) {
+        oldBlocks[index + i] = newBlocks[i];
     }
 }
 

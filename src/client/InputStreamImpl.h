@@ -124,14 +124,14 @@ protected:
     bool isLocalNode(DatanodeInfo & curNode);
     int32_t readInternal(char * buf, int32_t size);
     int32_t preadInternal(char * buf, int32_t size, int64_t position);
-    std::vector<const LocatedBlock *> getBlockRange(int64_t offset, int64_t length);
-    std::vector<const LocatedBlock *> getFinalizedBlockRange(int64_t offset, int64_t length);
-    const LocatedBlock * fetchBlockAt(int64_t offset, int64_t length, bool useCache);
-    void fetchBlockByteRange(const LocatedBlock * curBlock, int64_t start, int64_t end, char * buf);
+    std::vector<shared_ptr<LocatedBlock>> getBlockRange(int64_t offset, int64_t length);
+    std::vector<shared_ptr<LocatedBlock>> getFinalizedBlockRange(int64_t offset, int64_t length);
+    shared_ptr<LocatedBlock> fetchBlockAt(int64_t offset, int64_t length, bool useCache);
+    void fetchBlockByteRange(shared_ptr<LocatedBlock> curBlock, int64_t start, int64_t end, char * buf);
     void setupBlockReader(bool temporaryDisableLocalRead, shared_ptr<BlockReader> & blockReader,
-                          const LocatedBlock * curBlock, int64_t start, int64_t end,
+                          shared_ptr<LocatedBlock> curBlock, int64_t start, int64_t end,
                           std::vector<DatanodeInfo> & failedNodes, DatanodeInfo & curNode);
-    bool choseBestNode(const LocatedBlock * curBlock, std::vector<DatanodeInfo> & failedNodes,
+    bool choseBestNode(shared_ptr<LocatedBlock> curBlock, std::vector<DatanodeInfo> & failedNodes,
                        DatanodeInfo & curNode);
     int32_t readOneBlock(char * buf, int32_t size, bool shouldUpdateMetadataOnFailure);
     int64_t getFileLength();

@@ -334,7 +334,7 @@ bool InputStreamImpl::choseBestNode() {
     return false;
 }
 
-bool InputStreamImpl::choseBestNode(const LocatedBlock * curBlock, std::vector<DatanodeInfo> & failedNodes,
+bool InputStreamImpl::choseBestNode(shared_ptr<LocatedBlock> curBlock, std::vector<DatanodeInfo> & failedNodes,
                                     DatanodeInfo & curNode) {
     const std::vector<DatanodeInfo> & nodes = curBlock->getLocations();
 
@@ -452,7 +452,7 @@ void InputStreamImpl::setupBlockReader(bool temporaryDisableLocalRead) {
 }
 
 void InputStreamImpl::setupBlockReader(bool temporaryDisableLocalRead, shared_ptr<BlockReader> & blockReader,
-                                       const LocatedBlock * curBlock, int64_t start, int64_t end,
+                                       shared_ptr<LocatedBlock> curBlock, int64_t start, int64_t end,
                                        std::vector<DatanodeInfo> & failedNodes, DatanodeInfo & curNode) {
     bool lastReadFromLocal = false;
     exception_ptr lastException;
@@ -820,10 +820,10 @@ int32_t InputStreamImpl::preadInternal(char * buf, int32_t size, int64_t positio
 
         // determine the block and byte range within the block
         // corresponding to position and realLen
-        std::vector<const LocatedBlock *> blockRange = getBlockRange(position, (int64_t)realLen);
+        std::vector<shared_ptr<LocatedBlock>> blockRange = getBlockRange(position, (int64_t)realLen);
         int32_t remaining = realLen;
         int32_t bytesHasRead = 0;
-        for (const LocatedBlock * blk : blockRange) {
+        for (shared_ptr<LocatedBlock> blk : blockRange) {
             int64_t targetStart = position - blk->getOffset();
             int32_t bytesToRead = std::min(remaining, (int32_t)(blk->getNumBytes() - targetStart));
             int64_t targetEnd = targetStart + bytesToRead - 1;
@@ -859,14 +859,14 @@ int32_t InputStreamImpl::preadInternal(char * buf, int32_t size, int64_t positio
  * @return consequent segment of located blocks
  * @throws IOException
  */
-std::vector<const LocatedBlock *> InputStreamImpl::getBlockRange(int64_t offset, int64_t length) {
+std::vector<shared_ptr<LocatedBlock>> InputStreamImpl::getBlockRange(int64_t offset, int64_t length) {
     // getFileLength(): returns total file length
     // locatedBlocks.getFileLength(): returns length of completed blocks
     if (offset >= getFileLength()) {
         THROW(HdfsIOException, "Offset: %" PRId64 " exceeds file length: %" PRId64, offset, getFileLength());
     }
     lock_guard<std::recursive_mutex> lock(infoMutex);
-    std::vector<const LocatedBlock *> blocks;
+    std::vector<shared_ptr<LocatedBlock>> blocks;
     int64_t lengthOfCompleteBlk = lbs->getFileLength();
     bool readOffsetWithinCompleteBlk = offset < lengthOfCompleteBlk;
     bool readLengthPastCompleteBlk = offset + length > lengthOfCompleteBlk;
@@ -878,8 +878,10 @@ std::vector<const LocatedBlock *> InputStreamImpl::getBlockRange(int64_t offset,
 
     // get the blocks from incomplete block range
     if (readLengthPastCompleteBlk) {
-        lbs->getLastBlock()->setLastBlock(true);
-        blocks.push_back(lbs->getLastBlock().get());
+        shared_ptr<LocatedBlock> lastBlock = shared_ptr<LocatedBlock>(new LocatedBlock);
+        *lastBlock = *(lbs->getLastBlock());
+        lastBlock->setLastBlock(true);
+        blocks.push_back(lastBlock);
     }
 
     return blocks;
@@ -890,15 +892,15 @@ std::vector<const LocatedBlock *> InputStreamImpl::getBlockRange(int64_t offset,
  * Includes only the complete blocks.
  * Fetch them from the namenode if not cached.
  */
-std::vector<const LocatedBlock *> InputStreamImpl::getFinalizedBlockRange(int64_t offset, int64_t length) {
+std::vector<shared_ptr<LocatedBlock>> InputStreamImpl::getFinalizedBlockRange(int64_t offset, int64_t length) {
     lock_guard<std::recursive_mutex> lock(infoMutex);
     assert(!lbs);
-    std::vector<const LocatedBlock *> blockRange;
+    std::vector<shared_ptr<LocatedBlock>> blockRange;
     // search cached blocks first
     int64_t remaining = length;
     int64_t curOff = offset;
     while(remaining > 0) {
-        const LocatedBlock * blk = fetchBlockAt(curOff, remaining, true);
+        shared_ptr<LocatedBlock> blk = fetchBlockAt(curOff, remaining, true);
         assert(curOff >= blk->getOffset());
         blockRange.push_back(blk);
         int64_t bytesRead = blk->getOffset() + blk->getNumBytes() - curOff;
@@ -908,7 +910,7 @@ std::vector<const LocatedBlock *> InputStreamImpl::getFinalizedBlockRange(int64_
     return blockRange;
 }
 
-const LocatedBlock * InputStreamImpl::fetchBlockAt(int64_t offset, int64_t length, bool useCache) {
+shared_ptr<LocatedBlock> InputStreamImpl::fetchBlockAt(int64_t offset, int64_t length, bool useCache) {
     lock_guard<std::recursive_mutex> lock(infoMutex);
     int targetBlockIdx;
     const LocatedBlock * lb = lbs->findBlock(offset, targetBlockIdx);
@@ -928,10 +930,12 @@ const LocatedBlock * InputStreamImpl::fetchBlockAt(int64_t offset, int64_t lengt
         lbs->insertRange(targetBlockIdx, newBlocks->getBlocks());
         lb = lbs->findBlock(offset);
     }
-    return lb;
+    shared_ptr<LocatedBlock> ret = shared_ptr<LocatedBlock>(new LocatedBlock);
+    *ret = *lb;
+    return ret;
 }
 
-void InputStreamImpl::fetchBlockByteRange(const LocatedBlock * curBlock, int64_t start, int64_t end, char * buf) {
+void InputStreamImpl::fetchBlockByteRange(shared_ptr<LocatedBlock> curBlock, int64_t start, int64_t end, char * buf) {
     bool temporaryDisableLocalRead = false;
     std::string buffer;
     shared_ptr<BlockReader> blockReader;
