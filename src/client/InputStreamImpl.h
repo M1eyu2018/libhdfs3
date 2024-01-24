@@ -43,6 +43,7 @@
 #include "server/LocatedBlocks.h"
 #include "SessionConfig.h"
 #include "Unordered.h"
+#include "LockVector.h"
 
 #ifdef MOCK
 #include "TestDatanodeStub.h"
@@ -130,9 +131,9 @@ protected:
     void fetchBlockByteRange(shared_ptr<LocatedBlock> curBlock, int64_t start, int64_t end, char * buf);
     void setupBlockReader(bool temporaryDisableLocalRead, shared_ptr<BlockReader> & blockReader,
                           shared_ptr<LocatedBlock> curBlock, int64_t start, int64_t end,
-                          std::vector<DatanodeInfo> & failedNodes, DatanodeInfo & curNode);
-    bool choseBestNode(shared_ptr<LocatedBlock> curBlock, std::vector<DatanodeInfo> & failedNodes,
-                       DatanodeInfo & curNode);
+                          DatanodeInfo & curNode);
+    bool choseBestNode(shared_ptr<LocatedBlock> curBlock, DatanodeInfo & curNode);
+    const LocatedBlock * findBlockWithLock();
     int32_t readOneBlock(char * buf, int32_t size, bool shouldUpdateMetadataOnFailure);
     int64_t getFileLength();
     int64_t readBlockLength(const LocatedBlock & b);
@@ -169,7 +170,7 @@ protected:
     shared_ptr<LocatedBlocks> lbs;
     shared_ptr<SessionConfig> conf;
     std::string path;
-    std::vector<DatanodeInfo> failedNodes;
+    LockVector<DatanodeInfo> failedNodes;
     std::vector<char> localReaderBuffer;
     // mutex for state shared between read and pread
     std::recursive_mutex infoMutex;

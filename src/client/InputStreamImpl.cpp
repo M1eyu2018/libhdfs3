@@ -322,8 +322,7 @@ bool InputStreamImpl::choseBestNode() {
     const std::vector<DatanodeInfo> & nodes = curBlock->getLocations();
 
     for (size_t i = 0; i < nodes.size(); ++i) {
-        if (std::binary_search(failedNodes.begin(), failedNodes.end(),
-                               nodes[i])) {
+        if (failedNodes.binary_search(nodes[i])) {
             continue;
         }
 
@@ -334,13 +333,11 @@ bool InputStreamImpl::choseBestNode() {
     return false;
 }
 
-bool InputStreamImpl::choseBestNode(shared_ptr<LocatedBlock> curBlock, std::vector<DatanodeInfo> & failedNodes,
-                                    DatanodeInfo & curNode) {
+bool InputStreamImpl::choseBestNode(shared_ptr<LocatedBlock> curBlock, DatanodeInfo & curNode) {
     const std::vector<DatanodeInfo> & nodes = curBlock->getLocations();
 
     for (size_t i = 0; i < nodes.size(); ++i) {
-        if (std::binary_search(failedNodes.begin(), failedNodes.end(),
-                               nodes[i])) {
+        if (failedNodes.binary_search(nodes[i])) {
             continue;
         }
 
@@ -445,7 +442,7 @@ void InputStreamImpl::setupBlockReader(bool temporaryDisableLocalRead) {
                     curBlock->toString().c_str(), path.c_str(),
                     curNode.formatAddress().c_str(), GetExceptionDetail(e, buffer));
                 failedNodes.push_back(curNode);
-                std::sort(failedNodes.begin(), failedNodes.end());
+                failedNodes.sort();
             }
         }
     }
@@ -453,12 +450,12 @@ void InputStreamImpl::setupBlockReader(bool temporaryDisableLocalRead) {
 
 void InputStreamImpl::setupBlockReader(bool temporaryDisableLocalRead, shared_ptr<BlockReader> & blockReader,
                                        shared_ptr<LocatedBlock> curBlock, int64_t start, int64_t end,
-                                       std::vector<DatanodeInfo> & failedNodes, DatanodeInfo & curNode) {
+                                       DatanodeInfo & curNode) {
     bool lastReadFromLocal = false;
     exception_ptr lastException;
 
     while (true) {
-        if (!choseBestNode(curBlock, failedNodes, curNode)) {
+        if (!choseBestNode(curBlock, curNode)) {
             try {
                 if (lastException) {
                     rethrow_exception(lastException);
@@ -537,7 +534,7 @@ void InputStreamImpl::setupBlockReader(bool temporaryDisableLocalRead, shared_pt
                     curBlock->toString().c_str(), path.c_str(),
                     curNode.formatAddress().c_str(), GetExceptionDetail(e, buffer));
                 failedNodes.push_back(curNode);
-                std::sort(failedNodes.begin(), failedNodes.end());
+                failedNodes.sort();
             }
         }
     }
@@ -702,7 +699,7 @@ int32_t InputStreamImpl::readOneBlock(char * buf, int32_t size, bool shouldUpdat
             LOG(INFO, "IntputStreamImpl: Add invalid datanode %s to failed datanodes and try another datanode again for file %s.",
                 curNode.formatAddress().c_str(), path.c_str());
             failedNodes.push_back(curNode);
-            std::sort(failedNodes.begin(), failedNodes.end());
+            failedNodes.sort();
         }
 
         blockReader.reset();
@@ -726,7 +723,7 @@ int32_t InputStreamImpl::readInternal(char * buf, int32_t size) {
              * Check if we have got the block information we need.
              */
             if (!lbs || cursor >= getFileLength()
-                    || (cursor >= endOfCurBlock && !(lb = lbs->findBlock(cursor)))) {
+                    || (cursor >= endOfCurBlock && !(lb = findBlockWithLock()))) {
                 /*
                  * Get block information from namenode.
                  * Do RPC failover work in updateBlockInfos.
@@ -749,7 +746,7 @@ int32_t InputStreamImpl::readInternal(char * buf, int32_t size) {
              * seek to the right block to read.
              */
             if (cursor >= endOfCurBlock) {
-                lb = lbs->findBlock(cursor);
+                lb = findBlockWithLock();
 
                 if (!lb) {
                     THROW(HdfsIOException,
@@ -939,7 +936,6 @@ void InputStreamImpl::fetchBlockByteRange(shared_ptr<LocatedBlock> curBlock, int
     bool temporaryDisableLocalRead = false;
     std::string buffer;
     shared_ptr<BlockReader> blockReader;
-    std::vector<DatanodeInfo> failedNodes;
     DatanodeInfo curNode;
     int32_t refetchToken = 1; // only need to get a new access token once
 
@@ -949,7 +945,7 @@ void InputStreamImpl::fetchBlockByteRange(shared_ptr<LocatedBlock> curBlock, int
              * Setup block reader here and handle failure.
              */
             if (!blockReader) {
-                setupBlockReader(temporaryDisableLocalRead, blockReader, curBlock, start, end, failedNodes, curNode);
+                setupBlockReader(temporaryDisableLocalRead, blockReader, curBlock, start, end, curNode);
                 temporaryDisableLocalRead = false;
             }
         } catch (const HdfsInvalidBlockToken & e) {
@@ -1029,11 +1025,16 @@ void InputStreamImpl::fetchBlockByteRange(shared_ptr<LocatedBlock> curBlock, int
             LOG(INFO, "IntputStreamImpl: Add invalid datanode %s to failed datanodes and try another datanode again for file %s.",
                 curNode.formatAddress().c_str(), path.c_str());
             failedNodes.push_back(curNode);
-            std::sort(failedNodes.begin(), failedNodes.end());
+            failedNodes.sort();
         }
 
         blockReader.reset();
     }
+}
+
+const LocatedBlock * InputStreamImpl::findBlockWithLock() {
+    lock_guard<std::recursive_mutex> lock(infoMutex);
+    return lbs->findBlock(cursor);
 }
 
 /**
