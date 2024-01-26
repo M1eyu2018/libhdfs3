@@ -54,6 +54,14 @@ public:
         return std::binary_search(mvec.begin(), mvec.end(), value);
     }
 
+    const std::vector<T>& get(){
+        return mvec;
+    }
+
+    void set(std::vector<T> &vec) {
+        mvec = vec;
+    }
+
 };
 
 }
