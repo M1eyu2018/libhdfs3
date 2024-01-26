@@ -48,7 +48,7 @@
 #define TEST_HDFS_PREFIX "./"
 #endif
 
-#define BASE_DIR TEST_HDFS_PREFIX"/testOutputStream/"
+#define BASE_DIR TEST_HDFS_PREFIX"/testOutputStream"
 
 using namespace Hdfs;
 using namespace Hdfs::Internal;

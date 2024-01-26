@@ -31,14 +31,14 @@
 
 #if defined(__SSE4_2__) && defined(__LP64__)
 
-extern "C" unsigned int crc_pcl ( unsigned char * buffer, int len, unsigned int crc_init );
+//extern "C" unsigned int crc_pcl ( unsigned char * buffer, int len, unsigned int crc_init );
 
 namespace Hdfs {
 namespace Internal {
 
 void IntelAsmCrc32c::update(const void * b, int len) {
     unsigned char * buffer = const_cast<unsigned char *>(static_cast<const unsigned char *>(b));
-    crc = crc_pcl(buffer, len, crc);
+//    crc = crc_pcl(buffer, len, crc);
 }
 
 }

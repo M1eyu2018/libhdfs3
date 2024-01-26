@@ -2,7 +2,7 @@
 
 	<property>
 		<name>dfs.default.uri</name>
-		<value>hdfs://localhost:9000</value>
+		<value>hdfs://sg-testhdfs-nn0.bigdata.bigo.inner:8020</value>
 	</property>
 
 	<property>

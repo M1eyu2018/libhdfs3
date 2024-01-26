@@ -43,7 +43,7 @@ using namespace Hdfs::Internal;
 #define TEST_HDFS_PREFIX "./"
 #endif
 
-#define BASE_DIR TEST_HDFS_PREFIX"/testCInterface/"
+#define BASE_DIR TEST_HDFS_PREFIX"/testCInterface"
 
 using Hdfs::CheckBuffer;
 

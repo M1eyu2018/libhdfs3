@@ -53,7 +53,7 @@ using namespace Internal;
 #define TEST_HDFS_PREFIX "./"
 #endif
 
-#define BASE_DIR TEST_HDFS_PREFIX"/testInputStream/"
+#define BASE_DIR TEST_HDFS_PREFIX"/testInputStream"
 
 class TestInputStream: public ::testing::Test {
 public:

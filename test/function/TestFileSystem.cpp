@@ -43,7 +43,7 @@
 #define TEST_HDFS_PREFIX "./"
 #endif
 
-#define BASE_DIR TEST_HDFS_PREFIX"/testFileSystem/"
+#define BASE_DIR TEST_HDFS_PREFIX"/testFileSystem"
 
 using namespace Hdfs;
 using namespace Hdfs::Internal;

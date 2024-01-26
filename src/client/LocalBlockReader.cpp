@@ -84,18 +84,18 @@ LocalBlockReader::LocalBlockReader(const shared_ptr<ReadShortCircuitInfo>& info,
 
         case ChecksumTypeProto::CHECKSUM_CRC32:
         case ChecksumTypeProto::CHECKSUM_CRC32C:
-#if defined(__SSE4_2__) && defined(__LP64__)
-            checksum = std::make_shared<IntelAsmCrc32c>();
-#else
-#if !(((defined(__PPC64__) || defined(__powerpc64__)) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)) || (defined(__s390x__)))
+//#if defined(__SSE4_2__) && defined(__LP64__)
+//            checksum = std::make_shared<IntelAsmCrc32c>();
+//#else
+//#if !(((defined(__PPC64__) || defined(__powerpc64__)) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)) || (defined(__s390x__)))
             if (HWCrc32c::available()) {
                 checksum = shared_ptr<Checksum>(new HWCrc32c());
             } else
-#endif
+//#endif
             {
                 checksum = shared_ptr<Checksum>(new SWCrc32c());
             }
-#endif
+//#endif
 
             chunkSize = ReadBigEndian32FromArray(
                             &pMetaBuffer[BMVERSION_SIZE + CHECKSUM_TYPE_SIZE]);
