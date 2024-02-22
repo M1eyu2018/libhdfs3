@@ -77,7 +77,7 @@ private:
     bool readTrailingEmptyPacket();
     shared_ptr<PacketHeader> readPacketHeader();
     shared_ptr<Socket> getNextPeer(const DatanodeInfo& dn);
-    void checkResponse();
+    void checkResponse(bool error_token);
     void readNextPacket();
     void sendStatus();
     void verifyChecksum(int chunks);

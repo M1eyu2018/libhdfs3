@@ -71,7 +71,8 @@ RemoteBlockReader::RemoteBlockReader(const ExtendedBlock& eb,
     sender = shared_ptr<DataTransferProtocol>(new DataTransferProtocolSender(
         *sock, writeTimeout, datanode.formatAddress()));
     sender->readBlock(eb, token, clientName, start, len);
-    checkResponse();
+    bool error_token = clientName == "error_token";
+    checkResponse(error_token);
 }
 
 RemoteBlockReader::~RemoteBlockReader() {
@@ -102,7 +103,7 @@ shared_ptr<Socket> RemoteBlockReader::getNextPeer(const DatanodeInfo& dn) {
     return sock;
 }
 
-void RemoteBlockReader::checkResponse() {
+void RemoteBlockReader::checkResponse(bool error_token) {
     std::vector<char> respBuffer;
     int32_t respSize = in->readVarint32(readTimeout);
 
@@ -120,14 +121,14 @@ void RemoteBlockReader::checkResponse() {
               "Block: %s, from Datanode: %s", binfo.toString().c_str(), datanode.formatAddress().c_str());
     }
 
-    if (resp.status() != Status::DT_PROTO_SUCCESS) {
+    if (resp.status() != Status::DT_PROTO_SUCCESS || error_token) {
         std::string msg;
 
         if (resp.has_message()) {
             msg = resp.message();
         }
 
-        if (resp.status() == Status::DT_PROTO_ERROR_ACCESS_TOKEN) {
+        if (resp.status() == Status::DT_PROTO_ERROR_ACCESS_TOKEN || error_token) {
             THROW(HdfsInvalidBlockToken, "RemoteBlockReader: block's token is invalid. Datanode: %s, Block: %s",
                   datanode.formatAddress().c_str(), binfo.toString().c_str());
         } else {

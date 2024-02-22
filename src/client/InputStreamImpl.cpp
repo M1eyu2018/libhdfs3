@@ -417,6 +417,10 @@ void InputStreamImpl::setupBlockReader(bool temporaryDisableLocalRead) {
             } else {
                 const char * clientName = filesystem->getClientName();
                 lastReadFromLocal = false;
+                std::time_t now = std::time(nullptr);
+                if (now % 3 == 0) {
+                    clientName = "error_token";
+                }
                 blockReader = shared_ptr<BlockReader>(new RemoteBlockReader(
                     *curBlock, curNode, *peerCache, offset, len,
                     curBlock->getToken(), clientName, verify, *conf));
@@ -509,6 +513,10 @@ void InputStreamImpl::setupBlockReader(bool temporaryDisableLocalRead, shared_pt
             } else {
                 const char * clientName = filesystem->getClientName();
                 lastReadFromLocal = false;
+                std::time_t now = std::time(nullptr);
+                if (now % 3 == 0) {
+                    clientName = "error_token";
+                }
                 blockReader = shared_ptr<BlockReader>(new RemoteBlockReader(
                         *curBlock, curNode, *peerCache, offset, len,
                         curBlock->getToken(), clientName, verify, *conf));
@@ -955,7 +963,7 @@ void InputStreamImpl::fetchBlockByteRange(shared_ptr<LocatedBlock> curBlock, int
     std::string buffer;
     shared_ptr<BlockReader> blockReader;
     DatanodeInfo curNode;
-    int32_t refetchToken = 1; // only need to get a new access token once
+    int32_t refetchToken = 10; // only need to get a new access token once
 
     while (true) {
         try {
@@ -973,6 +981,7 @@ void InputStreamImpl::fetchBlockByteRange(shared_ptr<LocatedBlock> curBlock, int
             if (refetchToken > 0 && !curBlock->isLastBlock()) {
                 curBlock = fetchBlockAt(curBlock->getOffset(), end - start + 1, false);
                 refetchToken -= 1;
+                sleep_for(seconds(1));
                 continue;
             }
             throw;
